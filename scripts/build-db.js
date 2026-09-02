@@ -1,74 +1,157 @@
+/**
+ * build-db.js
+ * 扫描 posts/ 与 wiki/ 目录，将 Markdown 与 Frontmatter 编译为标准 SQLite 数据库
+ */
 import fs from 'node:fs'
 import path from 'node:path'
-import fm from 'front-matter'
+import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
+import fm from 'front-matter'
 
-const POSTS_DIR = path.resolve(process.cwd(), 'posts')
-const DIST_DIR = path.resolve(process.cwd(), 'dist')
-const DB_PATH = path.join(DIST_DIR, 'blog.sqlite')
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const rootDir = path.resolve(__dirname, '..')
+const postsDir = path.join(rootDir, 'posts')
+const wikiDir = path.join(rootDir, 'wiki')
+const distDir = path.join(rootDir, 'dist')
 
-if (!fs.existsSync(POSTS_DIR)) {
-  fs.mkdirSync(POSTS_DIR, { recursive: true })
-}
-if (!fs.existsSync(DIST_DIR)) {
-  fs.mkdirSync(DIST_DIR, { recursive: true })
-}
-
-if (fs.existsSync(DB_PATH)) {
-  fs.unlinkSync(DB_PATH)
+if (!fs.existsSync(distDir)) {
+  fs.mkdirSync(distDir, { recursive: true })
 }
 
-const db = new DatabaseSync(DB_PATH)
+const dbPath = path.join(distDir, 'blog.sqlite')
+if (fs.existsSync(dbPath)) {
+  fs.unlinkSync(dbPath)
+}
 
-// 初始化文章表结构（与 my-site server 保持 100% 一致）
+const db = new DatabaseSync(dbPath)
+
+// 初始化 Schema
 db.exec(`
+  -- 1. 单篇博客文章流（时间线）
   CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug TEXT UNIQUE NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
     excerpt TEXT,
     date TEXT NOT NULL,
-    category TEXT DEFAULT 'uncategorized',
-    tags TEXT, -- JSON array
-    content TEXT,
-    is_featured INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    category TEXT NOT NULL DEFAULT 'dev',
+    tags TEXT NOT NULL DEFAULT '[]',
+    content TEXT NOT NULL,
+    is_featured INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date DESC);
-  CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug);
+  CREATE INDEX IF NOT EXISTS idx_posts_category ON posts(category);
+
+  -- 2. 知识库专题专栏
+  CREATE TABLE IF NOT EXISTS wiki_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    description TEXT,
+    category TEXT NOT NULL DEFAULT 'dev',
+    icon TEXT,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- 3. 知识库具体章节条目
+  CREATE TABLE IF NOT EXISTS wiki_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_slug TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(topic_slug, slug)
+  );
+  CREATE INDEX IF NOT EXISTS idx_wiki_articles_topic ON wiki_articles(topic_slug, order_index ASC);
 `)
 
-const insertStmt = db.prepare(`
-  INSERT INTO posts (slug, title, excerpt, date, category, tags, content, is_featured, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-`)
+console.log('[build-db] Schema 初始化完成。')
 
-const files = fs.readdirSync(POSTS_DIR).filter(f => f.endsWith('.md'))
-console.log(`[build-db] 正在解析 ${files.length} 篇 Markdown 文章...`)
+// 1. 扫描 posts
+if (fs.existsSync(postsDir)) {
+  const postFiles = fs.readdirSync(postsDir).filter(f => f.endsWith('.md'))
+  console.log(`[build-db] 正在解析 ${postFiles.length} 篇单篇文章...`)
+  
+  const insertPost = db.prepare(`
+    INSERT INTO posts (slug, title, excerpt, date, category, tags, content, is_featured)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `)
 
-let count = 0
-for (const file of files) {
-  const fullPath = path.join(POSTS_DIR, file)
-  const raw = fs.readFileSync(fullPath, 'utf8')
-  const { attributes, body } = fm(raw)
+  for (const file of postFiles) {
+    const raw = fs.readFileSync(path.join(postsDir, file), 'utf-8')
+    const { attributes, body } = fm(raw)
+    const baseName = path.basename(file, '.md')
+    const slug = attributes.slug || baseName
+    const title = attributes.title || baseName
+    const excerpt = attributes.excerpt || ''
+    
+    let date = attributes.date || new Date().toISOString().slice(0, 10)
+    if (date instanceof Date) {
+      date = date.toISOString().slice(0, 10)
+    } else {
+      date = String(date)
+    }
 
-  const slug = attributes.slug || path.basename(file, '.md')
-  const title = attributes.title || slug
-  const excerpt = attributes.excerpt || body.slice(0, 150).replace(/[#*`\n]/g, ' ').trim()
-  let date = attributes.date || new Date().toISOString().slice(0, 10)
-  if (date instanceof Date) {
-    date = date.toISOString().slice(0, 10)
-  } else {
-    date = String(date)
+    const category = (attributes.category || 'dev').toLowerCase()
+    const tags = JSON.stringify(Array.isArray(attributes.tags) ? attributes.tags : [])
+    const isFeatured = attributes.isFeatured ? 1 : 0
+
+    insertPost.run(slug, title, excerpt, date, category, tags, body, isFeatured)
+    console.log(`  ✓ 已编译文章: [${date}] [${category}] ${title} (${slug})`)
   }
-  const category = attributes.category || 'engineering'
-  const tags = JSON.stringify(Array.isArray(attributes.tags) ? attributes.tags : [])
-  const isFeatured = attributes.isFeatured ? 1 : 0
-
-  insertStmt.run(slug, title, excerpt, date, category, tags, body, isFeatured)
-  console.log(`  ✓ 已编译: [${date}] ${title} (${slug})`)
-  count++
 }
 
-console.log(`[build-db] ✅ 编译完成！共写入 ${count} 篇文章 -> ${DB_PATH}`)
+// 2. 扫描 wiki
+if (fs.existsSync(wikiDir)) {
+  const topicDirs = fs.readdirSync(wikiDir, { withFileTypes: true }).filter(d => d.isDirectory())
+  console.log(`\n[build-db] 正在解析 ${topicDirs.length} 个知识库专题...`)
+
+  const insertTopic = db.prepare(`
+    INSERT INTO wiki_topics (slug, title, description, category, icon, order_index)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `)
+
+  const insertArticle = db.prepare(`
+    INSERT INTO wiki_articles (topic_slug, slug, title, order_index, content)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+
+  for (const d of topicDirs) {
+    const topicSlug = d.name
+    const dirPath = path.join(wikiDir, topicSlug)
+    const metaPath = path.join(dirPath, 'meta.json')
+    
+    let meta = { title: topicSlug, description: '', category: 'dev', icon: '', order: 0 }
+    if (fs.existsSync(metaPath)) {
+      try {
+        meta = { ...meta, ...JSON.parse(fs.readFileSync(metaPath, 'utf-8')) }
+      } catch (e) {
+        console.warn(`  ⚠️ 解析 ${metaPath} 失败:`, e.message)
+      }
+    }
+
+    insertTopic.run(topicSlug, meta.title, meta.description, meta.category, meta.icon || '', meta.order || 0)
+    console.log(`  📁 已载入专题: [${meta.category}] ${meta.title} (${topicSlug})`)
+
+    // 扫描该专题下的所有章节 .md
+    const articleFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.md'))
+    for (const af of articleFiles) {
+      const raw = fs.readFileSync(path.join(dirPath, af), 'utf-8')
+      const { attributes, body } = fm(raw)
+      const baseName = path.basename(af, '.md')
+      const articleSlug = attributes.slug || baseName
+      const articleTitle = attributes.title || baseName
+      const orderIndex = attributes.order || 0
+
+      insertArticle.run(topicSlug, articleSlug, articleTitle, orderIndex, body)
+      console.log(`    ↳ 章节: [${orderIndex}] ${articleTitle} (${articleSlug})`)
+    }
+  }
+}
+
+console.log(`\n[build-db] ✅ 全部编译完成！输出: ${dbPath}`)

@@ -1,0 +1,7 @@
+{
+  "title": "Three.js 3D 全景与交互开发实战",
+  "description": "从 WebGL 基础到车舱 3D 全景模型渲染、CanvasTexture 交互与着色器实战体系化梳理。",
+  "category": "dev",
+  "icon": "Box",
+  "order": 1
+}
