@@ -1,0 +1,12 @@
+{
+  "name": "my-blog-posts",
+  "version": "1.0.0",
+  "description": "Markdown posts repository for my-site blog",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-db.js"
+  },
+  "dependencies": {
+    "front-matter": "^4.0.2"
+  }
+}
