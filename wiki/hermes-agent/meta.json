@@ -1,0 +1,7 @@
+{
+  "title": "Hermes Agent 架构与自主智能体体系",
+  "description": "Nous Research 开源顶尖自主智能体 Hermes Agent：从三级记忆宫殿、工具链调用、多智能体协作（Subagents）到真实世界代码执行与系统编排全景实战。",
+  "category": "agent",
+  "icon": "/icons/nousresearch.svg",
+  "order": 1
+}

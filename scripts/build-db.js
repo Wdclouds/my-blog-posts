@@ -19,11 +19,22 @@ if (!fs.existsSync(distDir)) {
 }
 
 const dbPath = path.join(distDir, 'blog.sqlite')
-if (fs.existsSync(dbPath)) {
-  fs.unlinkSync(dbPath)
+try {
+  if (fs.existsSync(dbPath)) {
+    fs.unlinkSync(dbPath)
+  }
+} catch (e) {
+  // 如果文件被占用无法删除，稍后在数据库层面清理表
 }
 
 const db = new DatabaseSync(dbPath)
+
+// 初始化 Schema（如果表已存在先清空，实现完全干净的编译）
+db.exec(`
+  DROP TABLE IF EXISTS posts;
+  DROP TABLE IF EXISTS wiki_topics;
+  DROP TABLE IF EXISTS wiki_articles;
+`)
 
 // 初始化 Schema
 db.exec(`
